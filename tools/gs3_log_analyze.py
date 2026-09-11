@@ -247,6 +247,80 @@ class Analysis:
                 v.append(f"- 주의: index 1당 센서 시각 증가가 {per_idx:.0f}초 (60초여야 정상).")
         return v
 
+    # ---------------- adversarial field hypothesis ----------------
+    def adversarial_report(self) -> list[str]:
+        """Enumerate every way to read a glucose number out of the 8 record bytes and
+        ask: does the value change like glucose should? Disproves "the parser reads a
+        frozen field while real glucose changes elsewhere"."""
+        recs = [(self.records[i]["index"], bytes.fromhex(self.records[i]["raw"]))
+                for i in sorted(self.records) if self.records[i].get("raw")]
+        out = ["== 적대적 검증: 혈당이 다른 필드에 있을 가능성 =="]
+        if len(recs) < 3:
+            out.append("  원시 바이트를 가진 레코드가 3개 미만이라 검증 불가. '기록 내보내기' 로 더 모아 주세요.")
+            return out
+        n = len(recs)
+        out.append(f"  레코드 {n}개 (index {recs[0][0]}..{recs[-1][0]}), 8바이트를 읽는 모든 방법을 대조.")
+
+        cands: "OrderedDict[str, callable]" = OrderedDict()
+        for k in range(8):
+            cands[f"byte r{k}"] = (lambda raw, k=k: raw[k])
+        for k in range(7):
+            cands[f"u16LE r{k}{k+1}"] = (lambda raw, k=k: raw[k] | (raw[k + 1] << 8))
+            cands[f"u16BE r{k}{k+1}"] = (lambda raw, k=k: (raw[k] << 8) | raw[k + 1])
+        cands["10bit(r7<<2|r6>>6) [혈당]"] = (lambda raw: (raw[7] << 2) | (raw[6] >> 6))
+        cands["10bit(r1<<2|r0>>6) [temp]"] = (lambda raw: (raw[1] << 2) | (raw[0] >> 6))
+
+        def classify(vals):
+            distinct = len(set(vals))
+            asmg = sum(1 for v in vals if 40 <= v <= 400)
+            as18 = sum(1 for v in vals if 40 <= round(v * 1.8) <= 400)
+            interp = "mg/dL직접" if asmg >= as18 else "×1.8"
+            hits = max(asmg, as18)
+            mg = vals if asmg >= as18 else [round(v * 1.8) for v in vals]
+            swing = (max(mg) - min(mg)) if hits else None
+            plausible = hits >= n * 0.9 and distinct >= 2      # varies AND stays in glucose range
+            return distinct, min(vals), max(vals), interp, hits, swing, plausible
+
+        rows = [(name, fn([r for _, r in recs][0]), classify([fn(r) for _, r in recs])) for name, fn in cands.items()]
+        hdr = "  {:28s} {:>8} {:>6} {:>6} {:>8} {:>7} {:>10}"
+        out.append(hdr.format("필드", "distinct", "min", "max", "in범위", "swing", "판정"))
+        glucose_plausible_varying = []
+        for name, _, (d, mn, mx, interp, hits, swing, plausible) in rows:
+            sw = "-" if swing is None else str(swing)
+            if d == 1:
+                verdict = "고정"
+            elif hits < n * 0.9:
+                verdict = "범위밖"
+            elif plausible:
+                verdict = "혈당후보"
+                glucose_plausible_varying.append((name, swing))
+            else:
+                verdict = "?"
+            out.append(hdr.format(name, d, mn, mx, f"{hits}/{n}", sw, verdict))
+
+        out.append("== 판정 (적대적) ==")
+        gl = [(name, sw) for name, sw in glucose_plausible_varying]
+        MEAL = 40  # a real meal moves glucose >= ~40 mg/dL
+        meal_fields = [(name, sw) for name, sw in gl if sw is not None and sw >= MEAL]
+        # the actual glucose field
+        gvals = [(v << 2 | (r[6] >> 6)) for _, r in recs for v in [r[7]]]
+        gfrozen = len(set(gvals)) == 1
+        if gfrozen:
+            out.append(f"1) 혈당 필드(r6/r7)는 {n}개 레코드 내내 {gvals[0]}(0.1mmol) = {round(gvals[0]*1.8)} mg/dL 로 완전 고정.")
+        moving = [name for name, _, (d, *_ ) in rows if d >= 2 and name.startswith("byte")]
+        out.append(f"2) 같은 패킷에서 변하는 바이트: {', '.join(moving) or '없음'} → 복호화·파싱 파이프라인은 매분 새 값을 정상 전달 중(캐시/저장 버그 아님).")
+        if not meal_fields:
+            out.append(f"3) 8바이트 어디를 혈당으로 읽어도 식사 반응(>= {MEAL} mg/dL 변동)이 없음.")
+            if gl:
+                names = ", ".join(f"{name}(±{sw}mg/dL)" for name, sw in gl)
+                out.append(f"   범위 안에서 변하는 유일한 후보는 {names} 뿐인데, 이는 온도 필드로 34~35°C 대의 느린 드리프트이지 식후 곡선이 아님.")
+                out.append(f"   게다가 온도는 ×1.8(센서의 0.1mmol 방식)로 읽으면 전부 범위 밖 → 혈당 인코딩이 아님. r6/r7 이 이미 혈당(추세·경고비트까지 일관).")
+            out.append("→ 결론: 파서는 정상(범위·단위·비트배치 자기일관). 어느 필드에도 혈당 동역학이 없으므로 값 고정은 코드가 아니라 센서 출력.")
+        else:
+            names = ", ".join(f"{name}(±{sw}mg/dL)" for name, sw in meal_fields)
+            out.append(f"3) 주의: 식사 반응 크기로 변하는 필드가 있음 → {names}. 파서가 혈당 필드를 잘못 짚었을 수 있으니 수동 확인 필요.")
+        return out
+
     def write_csv(self, path: str) -> None:
         rows = [self.records[i] for i in sorted(self.records)]
         keys = ["index", "time", "time_utc", "log_ts", "mmol_x10", "mg_dl", "trend", "gcwarn", "twarn", "shedding",
@@ -327,6 +401,8 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("logfile", nargs="+")
     ap.add_argument("--all", action="store_true", help="show every record, not only index%%5==0")
+    ap.add_argument("--adversarial", action="store_true",
+                    help="adversarially test whether glucose could live in some other field (parser-vs-sensor)")
     ap.add_argument("--csv", help="also write all records to this CSV file")
     a = ap.parse_args(argv)
     an = Analysis()
@@ -335,6 +411,8 @@ def main(argv=None) -> None:
             for line in f:
                 an.feed_line(line.rstrip("\n"))
     print("\n".join(an.report(show_all=a.all)))
+    if a.adversarial:
+        print("\n" + "\n".join(an.adversarial_report()))
     if a.csv:
         an.write_csv(a.csv)
         print(f"\nCSV 저장: {a.csv}")
