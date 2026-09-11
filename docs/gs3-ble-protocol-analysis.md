@@ -246,8 +246,8 @@ ACK 바이트 의미: `[2]=reply_ack_resule`, `[3]=error_code`. bindUser(0x13) A
 |---|---|
 | r0 | bit0 `twarn`, bit1 `shedding`, bit6-7 = temp 하위 2비트 |
 | r1 | temp 상위 8비트 → `temp = (r1<<2) \| (r0>>6)` (10비트, 단위 미확인) |
-| r2-3 | u16 `dump` (의미 미확인) |
-| r4-5 | u16 `current` (벤더 `c1`, 원시 전류로 추정) |
+| r2-3 | u16 `fieldB` (벤더 `dump`, 의미 미확인. 실기에서 하위 바이트 r2 가 서서히 드리프트) |
+| r4-5 | u16 `fieldD` (벤더 `c1`. 과거 "원시 전류" 로 추정했으나 **실기에서 5시간+ 동안 `0x5aca=23242` 로 완전 고정** → 라이브 측정치가 아니라 고정 상수/미사용 필드로 정정) |
 | r6 | bit0 `gcwarn`, **bit3-5 `trend`(0..4)**, bit6-7 = glucose 하위 2비트 |
 | r7 | glucose 상위 8비트 → **`mmolLx10 = (r7<<2) \| (r6>>6)`** (10비트, 0.1 mmol/L 단위) |
 
