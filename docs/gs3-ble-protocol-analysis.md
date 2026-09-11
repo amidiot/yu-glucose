@@ -429,6 +429,48 @@ iOS 에서 남은 미확인 항목은 이제 "5번째 필드가 정말 MAC 인�
 - 입력: MAC(NFC 5번째 필드), 계정 ID(미바인딩 센서면 임의 숫자, 첫 값을 영구 사용), 앱 키 변종. 값·기록은 localStorage 에 남고, 재접속 시 마지막 index+1 부터 요청한다.
 - 한계: 페이지가 열려 있는 동안만 수신(백그라운드 없음). MTU 는 브라우저가 정하므로 긴 0x14 패킷이 잘리면 로그에 "MTU 로 잘렸을 가능성" 으로 표시된다. 모든 송수신 패킷을 wire/plain hex 로 로그에 남기므로 첫 연결 시도 자체가 §11.2 의 MAC 검증 실험이 된다.
 
+## 11.6 실기 연결 성공 (2026-09-11, 사용자 센서, Bluefy/iOS 18.7) — 프로토콜 전 과정 검증됨
+
+`docs/gs3/index.html` (Web Bluetooth) 로 실제 센서에 연결해 **handshake 전 과정과 혈당 레코드 수신까지 성공**했다. 이로써 문서의 [추정] 항목 다수가 [실기 확인됨] 으로 승격됐다.
+
+**첫 연결 (미바인딩 → 바인딩):**
+
+```
+→ auth  (MAC D2:D9:21:FC:1B:75, key THE544U0TYITE461)
+←        04 01 01 00     ACK 0xC002        ← MAC 정답. "NFC 5번째 필드 = MAC" 확정
+→ bindUser seq1
+←        04 13 01 04     error 4           ← 미바인딩, seq2 필요
+→ bindUser seq2
+←        04 13 02 00     성공              ← 계정 ID 로 바인딩 완료(영구)
+→ deviceInfo1 → 05 f0 01 71 05  (value 0x0571=1393)
+→ deviceInfo7 → 0c f0 07 00×9   (reset info 전부 0 = 측정기록 없음)
+→ activation → 04 0f 01 00      ACK 0xC010
+→ timeSync   → 04 03 01 00      ACK 0xC004
+→ askNewData start=1 → 04 14 00 05   result0/error5 = 아직 데이터 없음
+```
+
+**~2분 뒤 재연결 (이미 바인딩됨):**
+
+```
+→ auth       → 04 01 01 00
+→ bindUser seq1 → 04 13 01 00   error 0 → 한 번에 성공          ← 바인딩이 센서에 영구 저장됨을 입증
+→ deviceInfo1/7, activation(04 0f 00 04), timeSync(04 03 01 00)
+→ askNewData start=1 → 04 14 01 00   result1/error0 = 데이터 있음
+←  1b 14 02 01 00 <startTime u32> <rec0 8B> <rec1 8B> 00 00 <ck>   ← glucose count=2, idx 1·2
+   그리고 이후 idx=3 이 요청 없이 자발적으로 push (분당 1건)
+```
+
+**확정된 사실:**
+
+- **MAC = NFC NDEF 5번째 필드** (D2:D9:21:FC:1B:75). 센서는 MAC 을 인증에 실제로 사용·검증한다.
+- **바인딩은 영구.** 첫 연결은 seq1(error4)→seq2 로 신규 바인딩, 재연결은 seq1 즉시 성공. bindUser seq2 = "신규 바인딩 쓰기", seq1 = "기존 바인딩 확인".
+- **askNewData ACK 의 result/error 가 데이터 유무를 알린다**: `result0/error5` = 없음(웜업), `result1/error0` = 뒤이어 레코드 push.
+- **연결 유지 중 센서가 분당 1건씩 0x14 레코드를 자발적으로 push** (idx 3 이 요청 없이 수신됨). §7 의 [추정] 확정.
+- **혈당 레코드 파싱 정확.** 웜업 중이라 `mmolLx10=0` 이지만 `temp=(r1<<2)|(r0>>6)`, `current=r4|r5<<8` 는 정상값(temp 317→319, current 23242). `tools/gs3_protocol.py` 와 웹 파서가 실제 캡처를 동일하게 디코드.
+- **웜업**: 새 센서 첫 활성화 직후 temp/current 만 나오고 glucose=0. GS3 웜업 ~1시간 후 실제 mmol/L 이 나오기 시작할 것으로 예상 [추정].
+
+남은 유일한 미확인은 "웜업 종료 후 실제 mmol/L 값의 정확도(공식 앱과 비교)" 뿐이며, 프로토콜·연결·복호화·파싱은 전부 검증됐다.
+
 ## 12. 유의사항
 
 - Juggluco 는 **GPL-3.0** 이다. 코드를 그대로 가져오면 우리 앱도 GPL 이 된다. 이 문서와 `tools/gs3_protocol.py` 는 프로토콜 사실(상수·포맷·순서) 을 기술한 것이며, 상용 앱에는 클린룸으로 재구현할 것을 권장한다. 저자(j-kaltes) 는 "I don't help people with putting the code of Juggluco in their own app" 라고 명시 (Discussion #181).
