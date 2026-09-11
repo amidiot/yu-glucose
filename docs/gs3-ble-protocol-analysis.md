@@ -386,6 +386,40 @@ loop:
 
 ---
 
+## 11.4 실기 확인 결과 (2026-09-11, 사용자 센서)
+
+iPhone 의 NFC Tools 앱과 포장 UDI 라벨에서 직접 읽은 값이다. **[실기 확인됨]**
+
+| 항목 | 값 |
+|---|---|
+| NFC 태그 | ISO 14443-4 (Type 4 Tag, IsoDep), 제조 Shanghai Fudan Microelectronics, UID `1D:91:FD:23:87:00:00`, 60 B, 쓰기 가능 |
+| NDEF Text | `GJ,GS3*-BEABMA,GNL,AAC25A47AA44,D2D921FC1B75,PG336,FL` |
+| UDI (01) GTIN | `06972831641391` → 제조사 `6972831`, **SKU `64139`**, 검증 1 |
+| UDI (21) SN | `25090447AA44AV35` (라벨 하단 `47AA44`) |
+| UDI (10) LOT / (11) 생산 / (17) 만료 | `LT4E250904C` / 2025-10-31 / 2027-04-30 |
+| BLE 광고 이름 (nRF Connect) | `AAC25A47AA44` |
+| DIS Model / Manufacturer | `GS3*-BEANLA` / `SISENSING-GNL` |
+
+해석:
+
+- NDEF 4번째 필드 `AAC25A47AA44` 는 BLE 광고 이름과 **정확히 일치** → Juggluco 의 NFC 파싱(`gs3nfc()`: 오프셋 3 이 `GS3` → siType 4, 4번째 필드 = 장치명) 이 이 센서에 그대로 적용된다. 앱 키는 `THE544U0TYITE461`.
+- NDEF 5번째 필드 `D2D921FC1B75` → **MAC 후보 `D2:D9:21:FC:1B:75`** [추정]. 첫 바이트 `D2` 의 상위 2비트가 `11` 이라 BLE random static 주소 형식과 맞고(Zephyr/nRF 기본), Juggluco 주석 예시 `E2AFF9F01F19` 와 같은 자리다. 확정은 Android nRF Connect·리눅스 등에서 실제 주소와 대조하거나, 이 값으로 AUTH 가 ACK 되는지 보면 된다.
+- NFC 의 모델명은 `GS3*-BEABMA`, BLE DIS 는 `GS3*-BEANLA` 로 접미가 다르다. Juggluco 소스 주석의 예시도 NFC 쪽이 `BEABMA`, 광고명 형식이 `AAC25B18AAFZ` 로 같은 계열이므로, **Juggluco 저자가 개발에 쓴 것과 같은 국제판(GNL) 변종**으로 본다. "CN 판" 은 유통 경로 문제일 가능성이 높다.
+- **SKU `64139` 는 Juggluco 의 포장 데이터매트릭스 분기 목록(`64221` GS3 국제, `64300` GS3 CN, `64016` GS1, `64148` 트랜스미터) 에 없다** (`sensoren.hpp:893-925`). GTIN 에 `0697283164` 가 포함돼 `hasnum` 이 참이 되므로 데이터매트릭스로 등록하면 `makeSIsensorIndex(…, 45)` 로 빠져 **GS1 으로 잘못 등록**된다. Juggluco 를 쓸 때는 반드시 **센서 NFC 로 등록**해야 한다 (NFC 경로는 SKU 를 보지 않는다). Juggluco 에 SKU 64139 추가를 제보할 만하다.
+- SN `25090447AA44AV35` 의 7–12번째 문자 `47AA44` 가 광고명 끝 6자와 같다. Juggluco 의 `makeSI3sensorIndex()` 가 `Serial.end()-10` 에서 6자를 취하는 것과 일치한다.
+- 센서는 공식 앱으로 활성화된 적이 없으므로 미바인딩 상태다. 계정 ID 는 임의 숫자를 정해 **첫 바인딩 값을 기록**해 두고 이후 모든 앱에서 같은 값을 쓴다.
+
+이 센서용 패킷 (계정 ID 는 예시값 `2025090447004401`, time `1757606400`):
+
+```
+python3 tools/gs3_protocol.py vectors --mac D2:D9:21:FC:1B:75 --account-id 2025090447004401 --time 1757606400
+auth      plain 19 01 00 75 1B FC 21 D9 D2 54 48 45 35 34 34 55 30 54 59 49 54 45 34 36 31 61
+          wire  3E F6 6F AC 13 8F 79 05 6F D5 CE 46 3A 83 32 D9 B2 E7 BD 05 76 C1 55 80 4F 6B
+bindUser1 plain 0F 13 01 00 07 31 CF 1C BB 52 F1 00 00 00 00 BC   wire 28 E4 6E D9 0F 42 97 C0 06 D3 77 03 0F B7 06 30
+```
+
+iOS 에서 남은 미확인 항목은 이제 "5번째 필드가 정말 MAC 인가" 와 "센서가 MAC 을 검증하는가" 둘뿐이며, 둘 다 위 AUTH 를 한 번 보내 보면 답이 나온다 (미바인딩 센서라 실패해도 잃을 것이 없다).
+
 ## 12. 유의사항
 
 - Juggluco 는 **GPL-3.0** 이다. 코드를 그대로 가져오면 우리 앱도 GPL 이 된다. 이 문서와 `tools/gs3_protocol.py` 는 프로토콜 사실(상수·포맷·순서) 을 기술한 것이며, 상용 앱에는 클린룸으로 재구현할 것을 권장한다. 저자(j-kaltes) 는 "I don't help people with putting the code of Juggluco in their own app" 라고 명시 (Discussion #181).
