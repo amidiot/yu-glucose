@@ -1,0 +1,386 @@
+<title>GS3 Web Reader</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root {
+  --paper:#F5F7F6; --surface:#FFFFFF; --ink:#1B2126; --muted:#5E6973; --line:#D8DEE2;
+  --accent:#0E7C7B; --accent-ink:#FFFFFF; --code:#EDF1F0;
+  --low:#B3261E; --high:#B7791F; --ok:#2F7D4A; --warn-bg:#FBEBCF; --warn-ink:#7A5210;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper:#121719; --surface:#1A2124; --ink:#E4E9EA; --muted:#9AA6AC; --line:#2C363B;
+  --accent:#3FB8B4; --accent-ink:#0B1516; --code:#0F1416;
+  --low:#F08A80; --high:#F2C87A; --ok:#8ED7A5; --warn-bg:#3F2F12; --warn-ink:#F2C87A; } }
+:root[data-theme="dark"] {
+  --paper:#121719; --surface:#1A2124; --ink:#E4E9EA; --muted:#9AA6AC; --line:#2C363B;
+  --accent:#3FB8B4; --accent-ink:#0B1516; --code:#0F1416;
+  --low:#F08A80; --high:#F2C87A; --ok:#8ED7A5; --warn-bg:#3F2F12; --warn-ink:#F2C87A; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.5 -apple-system, "Apple SD Gothic Neo", system-ui, "Malgun Gothic", sans-serif; padding-inline:16px; padding-block:14px 40px; }
+.wrap { max-width:560px; margin:0 auto; display:grid; gap:14px; }
+h1 { font-size:18px; margin:0; font-weight:700; }
+.sub { color:var(--muted); font-size:13px; margin:2px 0 0; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+.reading { display:grid; grid-template-columns:1fr auto; align-items:end; gap:8px; }
+.big { font-size:64px; line-height:1; font-weight:700; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.unit { font-size:14px; color:var(--muted); margin-left:6px; font-weight:500; }
+.arrow { font-size:44px; line-height:1; text-align:right; }
+.meta { color:var(--muted); font-size:13px; margin-top:6px; display:flex; gap:12px; flex-wrap:wrap; }
+.low { color:var(--low); } .high { color:var(--high); } .ok { color:var(--ok); }
+label { display:block; font-size:12px; color:var(--muted); letter-spacing:.03em; text-transform:uppercase; margin-bottom:3px; }
+input, select { width:100%; font:inherit; font-family:ui-monospace, Menlo, monospace; font-size:15px; padding:9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--paper); color:var(--ink); }
+input:focus-visible, select:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.row { display:grid; grid-template-columns:1fr; gap:10px; }
+@media (min-width:480px) { .row.two { grid-template-columns:1fr 1fr; } }
+.btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+button { font:inherit; font-weight:600; padding:10px 14px; border-radius:8px; border:1px solid var(--line); background:var(--surface); color:var(--ink); cursor:pointer; }
+button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+button:disabled { opacity:.5; cursor:default; }
+.status { margin-top:10px; font-size:13px; color:var(--muted); min-height:1.4em; }
+.status b { color:var(--ink); font-weight:600; }
+.banner { background:var(--warn-bg); color:var(--warn-ink); border-radius:8px; padding:10px 12px; font-size:13px; }
+.banner a { color:inherit; }
+.small { font-size:12px; color:var(--muted); }
+.check { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); margin-top:8px; }
+.check input { width:auto; }
+table { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
+th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); }
+th { color:var(--muted); font-weight:600; font-size:12px; }
+td.n, th.n { text-align:right; }
+details summary { cursor:pointer; font-weight:600; }
+textarea { width:100%; height:220px; font:12px/1.4 ui-monospace, Menlo, monospace; background:var(--code); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:8px; resize:vertical; white-space:pre; }
+.hdr { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.hdr h2 { font-size:15px; margin:0; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>GS3 Web Reader</h1>
+    <p class="sub">Sibionics GS3 · FF31/FF32 · 임시 뷰어. 페이지가 열려 있는 동안만 수신합니다.</p>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <section class="card">
+    <div class="reading">
+      <div><span id="mgdl" class="big">—</span><span class="unit">mg/dL</span></div>
+      <div id="arrow" class="arrow">·</div>
+    </div>
+    <div class="meta">
+      <span id="mmol">— mmol/L</span>
+      <span id="age">기록 없음</span>
+      <span id="idx"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="row two">
+      <div>
+        <label for="mac">센서 MAC (NFC 5번째 필드)</label>
+        <input id="mac" placeholder="D2:D9:21:FC:1B:75" autocapitalize="characters" autocomplete="off">
+      </div>
+      <div>
+        <label for="acct">계정 ID (첫 바인딩 값을 영구 사용)</label>
+        <input id="acct" inputmode="numeric" placeholder="예: 2025090447004401" autocomplete="off">
+      </div>
+    </div>
+    <div class="row two" style="margin-top:10px">
+      <div>
+        <label for="variant">앱 키 변종</label>
+        <select id="variant">
+          <option value="intl">국제판 GNL (THE544U0TYITE461)</option>
+          <option value="cn">중국판 CN (GKSHGDU0TYA456G4)</option>
+        </select>
+      </div>
+      <div>
+        <label for="startidx">요청 시작 index</label>
+        <input id="startidx" inputmode="numeric" value="1">
+      </div>
+    </div>
+    <div class="check"><input type="checkbox" id="anydev"><label for="anydev" style="margin:0;text-transform:none">기기 선택창에 모든 BLE 기기 표시</label></div>
+    <div class="check"><input type="checkbox" id="zeromac"><label for="zeromac" style="margin:0;text-transform:none">실험: MAC 을 00:00:00:00:00:00 으로 보내기</label></div>
+    <div class="btns">
+      <button id="btnConnect" class="primary">센서 연결</button>
+      <button id="btnDisconnect" disabled>끊기</button>
+      <button id="btnGenId">임의 ID 생성</button>
+      <button id="btnSelftest">자가 진단</button>
+    </div>
+    <div id="status" class="status">대기 중</div>
+  </section>
+
+  <section class="card">
+    <div class="hdr"><h2>최근 기록 (5분 값)</h2><button id="btnClear" class="small" style="font-weight:500">기록 지우기</button></div>
+    <table>
+      <thead><tr><th>시각</th><th class="n">index</th><th class="n">mg/dL</th><th class="n">mmol/L</th><th>추세</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="small">아직 수신한 값이 없습니다.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <details open>
+      <summary>패킷 로그 (문제가 생기면 이 내용을 복사해 주세요)</summary>
+      <textarea id="log" readonly spellcheck="false"></textarea>
+      <div class="btns"><button id="btnCopy">로그 복사</button><button id="btnClearLog">로그 지우기</button></div>
+    </details>
+  </section>
+
+  <p class="small">iOS Safari 는 Web Bluetooth 를 지원하지 않습니다. iPhone 에서는 App Store 의 <b>Bluefy – Web BLE Browser</b> 로 이 페이지 주소를 여세요. 프로토콜 근거: Juggluco 공개 소스. 의료 판단에 사용하지 마세요.</p>
+</div>
+
+<script>
+'use strict';
+// ---------- constants (from Juggluco sources) ----------
+const SVC  = '0000ff30-0000-1000-8000-00805f9b34fb';
+const FF31 = '0000ff31-0000-1000-8000-00805f9b34fb';
+const FF32 = '0000ff32-0000-1000-8000-00805f9b34fb';
+const RC4_KEY = [0x01,0x38,0x0b,0x9a,0x00,0x5b,0x02,0x5d,0xcd,0x9e,0xc3,0x99,0x09,0x37,0xaa,0xe8];
+const APP_KEYS = { intl: 'THE544U0TYITE461', cn: 'GKSHGDU0TYA456G4' };
+const TREND = ['→','↗','↑','↘','↓'];
+const TREND_KO = ['보합','약간 상승','상승','약간 하강','하강'];
+
+// ---------- crypto / framing ----------
+function rc4(data) {
+  const S = new Uint8Array(256); for (let i = 0; i < 256; i++) S[i] = i;
+  let j = 0;
+  for (let i = 0; i < 256; i++) { j = (j + S[i] + RC4_KEY[i % 16]) & 255; const t = S[i]; S[i] = S[j]; S[j] = t; }
+  let a = 0, b = 0; const out = new Uint8Array(data.length);
+  for (let k = 0; k < data.length; k++) {
+    a = (a + 1) & 255; b = (b + S[a]) & 255; const t = S[a]; S[a] = S[b]; S[b] = t;
+    out[k] = data[k] ^ S[(S[a] + S[b]) & 255];
+  }
+  return out;
+}
+function checksum(bytes) { let s = 0; for (const x of bytes) s = (s + x) & 255; return (256 - s) & 255; }
+function frame(cmd, payload) {
+  const body = new Uint8Array(2 + payload.length); body[0] = 2 + payload.length; body[1] = cmd; body.set(payload, 2);
+  const out = new Uint8Array(body.length + 1); out.set(body); out[body.length] = checksum(body); return out;
+}
+function frameValid(p) { const n = p[0]; return n >= 2 && n < p.length && p[n] === checksum(p.subarray(0, n)); }
+function macLE(mac) {
+  const parts = mac.trim().replace(/-/g, ':').split(':').map(x => parseInt(x, 16));
+  if (parts.length !== 6 || parts.some(isNaN)) throw new Error('MAC 형식이 잘못됨: ' + mac);
+  return Uint8Array.from(parts.reverse());
+}
+function u32le(v) { return Uint8Array.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]); }
+function u16le(v) { return Uint8Array.from([v & 255, (v >>> 8) & 255]); }
+function cat(...arrs) { const n = arrs.reduce((s, a) => s + a.length, 0); const o = new Uint8Array(n); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; }
+const ascii = s => Uint8Array.from(s, c => c.charCodeAt(0));
+function acctBytes(idStr) {
+  let v = BigInt(idStr.trim()); const o = new Uint8Array(12);
+  for (let i = 7; i >= 0; i--) { o[i] = Number(v & 255n); v >>= 8n; }
+  return o;
+}
+const buildAuth = (mac, key) => rc4(frame(0x01, cat(Uint8Array.of(0), macLE(mac), ascii(key))));
+const buildBind = (acct, seq) => rc4(frame(0x13, cat(Uint8Array.of(seq), acctBytes(acct))));
+const buildDevInfo = sub => rc4(frame(0xF0, Uint8Array.of(sub)));
+const buildActivation = t => rc4(frame(0x0F, u32le(t)));
+const buildTimeSync = t => rc4(frame(0x03, u32le(t)));
+const buildAsk = (start, end) => rc4(frame(0x14, cat(u16le(start), u16le(end))));
+const hex = b => Array.from(b, x => x.toString(16).padStart(2, '0')).join(' ');
+const now = () => Math.floor(Date.now() / 1000);
+
+// ---------- parsing ----------
+function parse(data) {
+  if (data.length === 5 && data[0] === 4 && data[1] === 0 && data[2] === 0 && data[3] === 0 && data[4] === 0xFC)
+    return { kind: 'hello', plain: data, cmd: 0 };
+  const p = rc4(data);
+  if (p.length < 2) return { kind: 'bad', plain: p, note: '너무 짧음' };
+  const n = p[0], cmd = p[1];
+  if (n === 4 && p.length >= 5) {
+    if (p[4] !== checksum(p.subarray(0, 4))) return { kind: 'bad', plain: p, cmd, note: 'ACK 체크섬 불일치' };
+    return { kind: 'ack', plain: p, cmd, result: p[2], error: p[3] };
+  }
+  if (!frameValid(p)) {
+    const note = n >= p.length ? `체크섬 불일치: 길이필드 ${n} > 수신 ${p.length} (MTU 로 잘렸을 가능성)` : '체크섬 불일치';
+    return { kind: 'bad', plain: p, cmd, note };
+  }
+  if (cmd === 0x14) {
+    const count = p[2], startIndex = p[3] | (p[4] << 8);
+    const startTime = (p[5] | (p[6] << 8) | (p[7] << 16) | (p[8] << 24)) >>> 0;
+    const remaining = p[n - 2] | (p[n - 1] << 8);
+    const records = [];
+    for (let i = 0; i < count; i++) {
+      const r = p.subarray(9 + i * 8, 17 + i * 8);
+      records.push({ index: startIndex + i, time: startTime + i * 60, mmolx10: (r[7] << 2) | (r[6] >> 6), trend: (r[6] >> 3) & 7,
+        temp: (r[1] << 2) | (r[0] >> 6), dump: r[2] | (r[3] << 8), current: r[4] | (r[5] << 8), gcwarn: r[6] & 1, twarn: r[0] & 1 });
+    }
+    return { kind: 'glucose', plain: p, cmd, count, startIndex, startTime, remaining, records };
+  }
+  if (cmd === 0xF0) return { kind: 'devinfo', plain: p, cmd, sub: p[2] };
+  return { kind: 'other', plain: p, cmd };
+}
+
+// ---------- state ----------
+const $ = id => document.getElementById(id);
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+let device = null, ff31 = null, ff32 = null, connected = false, stage = 'idle', stageTimer = null, reconnects = 0;
+let readings = store.get('gs3.readings', {});   // index -> {t, mmolx10, trend}
+let lastIndex = store.get('gs3.lastIndex', 0);
+
+$('mac').value = store.get('gs3.mac', '');
+$('acct').value = store.get('gs3.acct', '');
+$('variant').value = store.get('gs3.variant', 'intl');
+$('startidx').value = String(lastIndex + 1);
+for (const id of ['mac', 'acct', 'variant']) $(id).addEventListener('change', () => store.set('gs3.' + id, $(id).value.trim()));
+
+function log(line) {
+  const t = new Date(); const ts = t.toTimeString().slice(0, 8) + '.' + String(t.getMilliseconds()).padStart(3, '0');
+  const ta = $('log'); ta.value += `[${ts}] ${line}\n`;
+  const lines = ta.value.split('\n'); if (lines.length > 400) ta.value = lines.slice(-400).join('\n');
+  ta.scrollTop = ta.scrollHeight;
+}
+function status(html) { $('status').innerHTML = html; }
+function setStage(s, hint) {
+  stage = s; clearTimeout(stageTimer);
+  if (s === 'idle' || s === 'streaming') return;
+  stageTimer = setTimeout(() => {
+    status(`<b>${s}</b> 단계에서 8초간 응답 없음. ${hint || ''}`);
+    log(`!! ${s} 단계 응답 없음`);
+  }, 8000);
+}
+
+function render() {
+  const idxs = Object.keys(readings).map(Number).sort((a, b) => a - b);
+  const tb = $('rows'); tb.innerHTML = '';
+  if (!idxs.length) { tb.innerHTML = '<tr><td colspan="5" class="small">아직 수신한 값이 없습니다.</td></tr>'; $('mgdl').textContent = '—'; $('mgdl').className = 'big'; $('arrow').textContent = '·'; $('mmol').textContent = '— mmol/L'; $('age').textContent = '기록 없음'; $('idx').textContent = ''; return; }
+  const last = readings[idxs[idxs.length - 1]];
+  const mg = Math.round(last.mmolx10 * 1.8);
+  $('mgdl').textContent = String(mg);
+  $('mgdl').className = 'big ' + (mg < 70 ? 'low' : mg > 180 ? 'high' : 'ok');
+  $('arrow').textContent = TREND[last.trend] || '·';
+  $('mmol').textContent = (last.mmolx10 / 10).toFixed(1) + ' mmol/L';
+  const ageMin = Math.round((now() - last.t) / 60);
+  $('age').textContent = ageMin < 1 ? '방금' : `${ageMin}분 전 (${new Date(last.t * 1000).toLocaleTimeString()})`;
+  $('idx').textContent = `index ${idxs[idxs.length - 1]}`;
+  for (const i of idxs.slice(-36).reverse()) {
+    const r = readings[i]; const d = new Date(r.t * 1000);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })} ${d.toTimeString().slice(0, 5)}</td><td class="n">${i}</td><td class="n">${Math.round(r.mmolx10 * 1.8)}</td><td class="n">${(r.mmolx10 / 10).toFixed(1)}</td><td>${TREND[r.trend] || '?'} ${TREND_KO[r.trend] || ''}</td>`;
+    tb.appendChild(tr);
+  }
+}
+
+// ---------- BLE ----------
+function toBytes(v) {
+  if (v instanceof DataView) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  if (v instanceof ArrayBuffer) return new Uint8Array(v);
+  if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  return new Uint8Array(v);
+}
+async function write(bytes, what) {
+  if (!ff32) throw new Error('FF32 없음');
+  log(`→ FF32 ${what}: ${hex(bytes)}`);
+  if (typeof ff32.writeValueWithResponse === 'function') await ff32.writeValueWithResponse(bytes);
+  else await ff32.writeValue(bytes);
+}
+function params() {
+  const mac = $('zeromac').checked ? '00:00:00:00:00:00' : $('mac').value.trim();
+  const acct = $('acct').value.trim();
+  if (!/^\d{1,19}$/.test(acct)) throw new Error('계정 ID 는 1~19자리 숫자여야 합니다 (임의 ID 생성 버튼 사용 가능)');
+  return { mac, acct, key: APP_KEYS[$('variant').value] };
+}
+
+async function onNotify(ev) {
+  const data = toBytes(ev.target.value);
+  const pkt = parse(data);
+  log(`← FF31 wire ${hex(data)} | plain ${hex(pkt.plain)} | ${pkt.kind}${pkt.note ? ' ' + pkt.note : ''}`);
+  try {
+    const { mac, acct, key } = params();
+    if (pkt.kind === 'ack') {
+      const t = ((pkt.cmd | 0xC000) + 1) & 0xFFFF;
+      if (t === 0xC002) { status('인증 ACK 수신 → 계정 바인딩 중'); setStage('bind', '계정 ID 를 확인하세요.'); await write(buildBind(acct, 1), 'bindUser seq1'); }
+      else if (t === 0xC014) {
+        if (pkt.error === 0) { status('바인딩 성공 → 장치 정보 요청'); setStage('devinfo1'); await write(buildDevInfo(1), 'deviceInfo 1'); }
+        else if (pkt.result === 2) { status('<b>Wrong account ID</b>: 이 센서는 다른 계정 ID 로 이미 바인딩되어 있습니다.'); log('!! Wrong account ID'); setStage('idle'); }
+        else { status(`바인딩 오류 ${pkt.error} → seq 2 재시도`); setStage('bind2'); await write(buildBind(acct, 2), 'bindUser seq2'); }
+      }
+      else if (t === 0xC010) { status('활성화/시간 ACK → 시간 동기'); setStage('timesync'); await write(buildTimeSync(now()), 'timeSync'); }
+      else if (t === 0xC004) { const s = Math.max(1, parseInt($('startidx').value, 10) || 1); status(`시간 동기 ACK → index ${s} 부터 혈당 요청`); setStage('askdata'); await write(buildAsk(s, 0), `askNewData start=${s}`); }
+      else if (t === 0xC015) { status('혈당 요청 접수됨. 데이터 수신 대기…'); setStage('streaming'); }
+      else if (t === 0xC001) { status('센서가 인증을 요구함 (cmd0 ACK)'); }
+      else log(`  (처리 없는 ACK type 0x${t.toString(16)})`);
+    } else if (pkt.kind === 'devinfo') {
+      if (pkt.sub === 1) { status('장치정보 1 수신 → 장치정보 7 요청'); setStage('devinfo7'); await write(buildDevInfo(7), 'deviceInfo 7'); }
+      else if (pkt.sub === 7) { status('리셋 정보 수신 → 활성화/시간 전송'); setStage('activation'); await write(buildActivation(now()), 'activation/time'); }
+    } else if (pkt.kind === 'glucose') {
+      setStage('streaming');
+      for (const r of pkt.records) {
+        lastIndex = Math.max(lastIndex, r.index);
+        if (r.index % 5 === 0 && r.mmolx10 > 0) readings[r.index] = { t: r.time, mmolx10: r.mmolx10, trend: r.trend };
+        log(`   idx=${r.index} t=${new Date(r.time * 1000).toLocaleTimeString()} ${(r.mmolx10 / 10).toFixed(1)} mmol/L ${Math.round(r.mmolx10 * 1.8)} mg/dL trend=${r.trend} temp=${r.temp} cur=${r.current}`);
+      }
+      store.set('gs3.readings', readings); store.set('gs3.lastIndex', lastIndex);
+      $('startidx').value = String(lastIndex + 1);
+      status(`혈당 ${pkt.count}건 수신 (index ${pkt.startIndex}~, 남은 ${pkt.remaining})`);
+      render();
+    } else if (pkt.kind === 'hello') {
+      status('평문 hello 수신 (무시)');
+    }
+  } catch (e) { log('!! ' + e.message); status('오류: ' + e.message); }
+}
+
+async function connect() {
+  let p; try { p = params(); } catch (e) { status(e.message); return; }
+  if (!navigator.bluetooth) { status('이 브라우저에는 Web Bluetooth 가 없습니다. iPhone 은 Bluefy 로 여세요.'); return; }
+  try {
+    $('btnConnect').disabled = true;
+    const opts = $('anydev').checked ? { acceptAllDevices: true, optionalServices: [SVC] }
+                                     : { filters: [{ services: [SVC] }, { namePrefix: 'AAC' }], optionalServices: [SVC] };
+    status('기기 선택창에서 센서를 고르세요…');
+    device = await navigator.bluetooth.requestDevice(opts);
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    await openGatt(p);
+  } catch (e) {
+    log('!! connect: ' + (e.message || e)); status('연결 실패: ' + (e.message || e)); $('btnConnect').disabled = false;
+  }
+}
+async function openGatt(p) {
+  status(`연결 중: ${device.name || device.id}`); log(`connecting to ${device.name || '(no name)'} id=${device.id}`);
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  ff31 = await svc.getCharacteristic(FF31); ff32 = await svc.getCharacteristic(FF32);
+  ff31.addEventListener('characteristicvaluechanged', onNotify);
+  await ff31.startNotifications();
+  connected = true; reconnects = 0; $('btnDisconnect').disabled = false;
+  log('FF31 notifications on');
+  await new Promise(r => setTimeout(r, 250));
+  status('인증 전송…'); setStage('auth', 'MAC 이 틀렸거나 앱 키 변종이 다를 수 있습니다. NFC 5번째 필드를 확인하고, "MAC 0" 실험도 시도해 보세요.');
+  await write(buildAuth(p.mac, p.key), `auth mac=${p.mac}`);
+}
+async function onDisconnected() {
+  connected = false; clearTimeout(stageTimer); $('btnDisconnect').disabled = true;
+  log('disconnected'); status('연결 끊김');
+  if (device && reconnects < 3 && stage !== 'idle') {
+    reconnects++; status(`연결 끊김 → ${reconnects}번째 재연결 시도…`);
+    await new Promise(r => setTimeout(r, 1500));
+    try { await openGatt(params()); } catch (e) { log('!! reconnect: ' + (e.message || e)); $('btnConnect').disabled = false; }
+  } else { $('btnConnect').disabled = false; stage = 'idle'; }
+}
+function disconnect() { stage = 'idle'; clearTimeout(stageTimer); try { device && device.gatt.connected && device.gatt.disconnect(); } catch (e) {} $('btnConnect').disabled = false; $('btnDisconnect').disabled = true; }
+
+// ---------- UI ----------
+$('btnConnect').addEventListener('click', connect);
+$('btnDisconnect').addEventListener('click', disconnect);
+$('btnGenId').addEventListener('click', () => {
+  if ($('acct').value.trim() && !confirm('이미 계정 ID 가 있습니다. 새로 만들면 이 센서에 다시 바인딩할 수 없습니다. 계속할까요?')) return;
+  const id = String(Date.now()) + String(Math.floor(Math.random() * 900) + 100);
+  $('acct').value = id; store.set('gs3.acct', id); status(`임의 계정 ID 생성: ${id} — 반드시 기록해 두세요`);
+});
+$('btnSelftest').addEventListener('click', () => {
+  const a = hex(rc4(Uint8Array.from([0x23,0xF7,0x6F,0xD9,0xF4]))) === '04 00 00 00 fc';
+  const b = hex(rc4(Uint8Array.from([0x24,0xE7,0x6F,0x34]))) === '03 10 00 ed';
+  let c = false; try { c = hex(buildAuth('E2:AF:F9:F0:1F:19', APP_KEYS.intl)).startsWith('3e f6 6f c0 17 83 a1 73'); } catch (e) {}
+  const ble = !!navigator.bluetooth;
+  status(`RC4 키 ${a && b ? 'OK' : '실패'} · 인증 패킷 ${c ? 'OK' : '실패'} · Web Bluetooth ${ble ? '사용 가능' : '없음 (Bluefy 필요)'}`);
+  log(`selftest rc4=${a && b} auth=${c} webbluetooth=${ble} ua=${navigator.userAgent}`);
+});
+$('btnClear').addEventListener('click', () => { if (confirm('저장된 혈당 기록을 지울까요?')) { readings = {}; lastIndex = 0; store.set('gs3.readings', readings); store.set('gs3.lastIndex', 0); $('startidx').value = '1'; render(); } });
+$('btnCopy').addEventListener('click', async () => { const ta = $('log'); try { await navigator.clipboard.writeText(ta.value); status('로그를 복사했습니다'); } catch (e) { ta.focus(); ta.select(); status('길게 눌러 복사하세요'); } });
+$('btnClearLog').addEventListener('click', () => { $('log').value = ''; });
+
+if (!navigator.bluetooth) {
+  const b = $('banner'); b.hidden = false;
+  b.innerHTML = '이 브라우저는 <b>Web Bluetooth</b> 를 지원하지 않아 센서에 연결할 수 없습니다. iPhone 에서는 App Store 의 <b>Bluefy – Web BLE Browser</b> 앱을 설치하고 그 안에서 이 페이지 주소를 여세요. (Android/PC 는 Chrome 에서 바로 됩니다.)';
+}
+render();
+log('GS3 Web Reader ready');
+</script>

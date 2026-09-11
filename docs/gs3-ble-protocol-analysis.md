@@ -420,6 +420,15 @@ bindUser1 plain 0F 13 01 00 07 31 CF 1C BB 52 F1 00 00 00 00 BC   wire 28 E4 6E 
 
 iOS 에서 남은 미확인 항목은 이제 "5번째 필드가 정말 MAC 인가" 와 "센서가 MAC 을 검증하는가" 둘뿐이며, 둘 다 위 AUTH 를 한 번 보내 보면 답이 나온다 (미바인딩 센서라 실패해도 잃을 것이 없다).
 
+## 11.5 iPhone 에서 바로 보기: Web Bluetooth 페이지
+
+`docs/gs3/index.html` 은 외부 의존성 없는 한 파일짜리 웹 뷰어다. RC4·프레이밍·handshake 상태 기계를 JS 로 옮겼고, 빌더 출력은 `tools/gs3_protocol.py` 의 벡터와 바이트 단위로 일치한다 (Node 로 검증).
+
+- iOS Safari 는 Web Bluetooth 가 없다. App Store 의 **Bluefy – Web BLE Browser** (또는 WebBLE) 로 HTTPS 주소를 열어야 한다. Android/PC 는 Chrome 에서 바로 된다.
+- 호스팅: 저장소를 public 으로 바꾼 뒤 Settings → Pages → Deploy from a branch → 브랜치 선택, 폴더 `/docs` → `https://amidiot.github.io/yu-glucose/gs3/`.
+- 입력: MAC(NFC 5번째 필드), 계정 ID(미바인딩 센서면 임의 숫자, 첫 값을 영구 사용), 앱 키 변종. 값·기록은 localStorage 에 남고, 재접속 시 마지막 index+1 부터 요청한다.
+- 한계: 페이지가 열려 있는 동안만 수신(백그라운드 없음). MTU 는 브라우저가 정하므로 긴 0x14 패킷이 잘리면 로그에 "MTU 로 잘렸을 가능성" 으로 표시된다. 모든 송수신 패킷을 wire/plain hex 로 로그에 남기므로 첫 연결 시도 자체가 §11.2 의 MAC 검증 실험이 된다.
+
 ## 12. 유의사항
 
 - Juggluco 는 **GPL-3.0** 이다. 코드를 그대로 가져오면 우리 앱도 GPL 이 된다. 이 문서와 `tools/gs3_protocol.py` 는 프로토콜 사실(상수·포맷·순서) 을 기술한 것이며, 상용 앱에는 클린룸으로 재구현할 것을 권장한다. 저자(j-kaltes) 는 "I don't help people with putting the code of Juggluco in their own app" 라고 명시 (Discussion #181).
