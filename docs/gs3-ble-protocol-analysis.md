@@ -471,6 +471,36 @@ iOS 에서 남은 미확인 항목은 이제 "5번째 필드가 정말 MAC 인�
 
 남은 유일한 미확인은 "웜업 종료 후 실제 mmol/L 값의 정확도(공식 앱과 비교)" 뿐이며, 프로토콜·연결·복호화·파싱은 전부 검증됐다.
 
+## 11.7 혈당 파싱 검증 (2026-09-11, "혈당이 아예 안 변한다" 보고에 대한 대조)
+
+**Juggluco 원본과 바이트 단위 대조 [검증됨].** Juggluco `primary` 브랜치 커밋 `23ebeaa` (v11.0.1, 2026-09-02) 를 다시 받아 `Common/src/main/cpp/sibionics3/interpretgs3.cpp:508-539` 의 `case 0x14` 와 `tools/gs3_protocol.py` / `docs/gs3/index.html` 의 파서를 한 줄씩 대조했다.
+
+| 항목 | Juggluco (`interpretgs3.cpp`) | 이 저장소 (py / html) | 일치 |
+|---|---|---|---|
+| count | `plain[2]` | `p[2]` | ✓ |
+| startIndex | `*(uint16_t*)&plain[3]` (LE) | `struct <H @3` / `p[3]\|p[4]<<8` | ✓ |
+| startTime | `*(uint32_t*)&plain[5]` (LE) | `<I @5` / `p[5..8]` LE | ✓ |
+| 레코드 i | `&plain[9 + i*8]` | `p[9+8i : 17+8i]` | ✓ |
+| mmolLx10 | `(b10<<2) \| (bf>>6)`, b10=r[7], bf=r[6] | `(r[7]<<2) \| (r[6]>>6)` | ✓ |
+| trend | `(bf>>3) & 7` | `(r[6]>>3) & 7` | ✓ |
+| remaining | `plain[len-2] \| plain[len-1]<<8` | 동일 | ✓ |
+| 시각 | `startTime + i*60` | 동일 | ✓ |
+| mg/dL | `round(mmolLx10*.1*convfactordL)`, convfactordL=18.0 | `round(mmolx10*1.8)` | ✓ |
+| 저장 조건 | `hdr_index%5==0` | `index%5==0 && mmolx10>0` | 페이지는 0 을 추가로 버림 |
+
+- Juggluco 는 값을 가공하지 않는다: `sens->savestream(eventTime,index,mgdL,…)` 로 그대로 저장하고, GS3 경로에서는 벤더 알고리즘(`process2/3`) 을 호출하지 않는다. temp/dump/c1/warn 비트 추출은 Juggluco 에서 주석 처리돼 있고(사용 안 함), 우리 파서의 해당 필드 식은 그 주석과 같다.
+- 명령 빌더도 동일: 시간동기 0x03 = `06 03 <u32 LE> ck` (`v120_isec_update`, 시각은 `time(nullptr)` = UTC epoch), 활성화 0x0F = `06 0F <u32 LE> ck`, 인증 0x01 = `19 01 00 <MAC LE 6> <키 16> ck`. 페이지의 `now()` 도 UTC epoch 다.
+- 파싱 코드 자체는 2026-07-03 에 Juggluco 저장소에 들어온 뒤 바뀐 적이 없다 (`git log -- sibionics3/`: 이후 커밋은 Java 연결 처리와 CN 판 siType 만 수정).
+- Juggluco 의 GS3 NFC 처리(`Sib3Scan.java`) 는 NDEF **읽기**뿐이다 (transceive/write 없음). 즉 Juggluco 도 BLE 명령만으로 센서를 시작하며, 이 페이지의 handshake 는 Juggluco 와 동등하다. 10.9.2 변경 로그: "GS3 센서는 이전 버전에서는 공식 앱을 먼저 썼을 때만 동작했으나 이제 Juggluco 가 첫 앱이어도 동작" — 우리가 옮긴 소스는 그 이후 버전이다.
+- juggluco.nl sensors 페이지(Juggluco 저자): "센서는 매분 값을 보내지만 5번은 같은 값이다", "index%5==0 인 값(60,65,70,…)만 보면 Juggluco 의 혈당값은 Sibionics 공식 앱과 같다". 즉 **이 비트 배치로 뽑은 값은 공식 앱과 대조 검증된 값**이고, 정상 동작에서도 값은 5분에 한 번만 바뀐다.
+
+**결론:** 파서(오프셋·비트 위치·엔디안·단위 변환) 는 Juggluco 와 완전히 같고, Juggluco 저자가 그 결과를 공식 앱과 대조했다. 값이 "아예" 안 변한다면 파서가 아니라 다음 둘 중 하나다.
+
+1. **센서가 보내는 r6/r7 바이트 자체가 고정** — 파서는 받은 대로 보여 주는 것. (센서 상태·활성화 문제)
+2. **새 레코드가 저장되지 않아 화면이 마지막 값에 멈춤** — `mmolLx10=0` 필터, MTU 잘림이 같은 start 에서 반복, 연결 끊김 후 재연결 실패 등. 이 경우 화면의 "N분 전" 이 계속 커진다.
+
+어느 쪽인지는 패킷 로그로만 구분된다. 확인 절차: 페이지의 **로그 복사** → 텍스트 파일 저장 → `python3 tools/gs3_log_analyze.py 로그.txt --all`. 스크립트는 `← FF31 wire …` 의 hex 를 다시 복호화·파싱해서 (1) 레코드별 전체 필드(r0–r7 원시 바이트 포함), (2) 필드별 변동 여부(각 바이트, u16 LE 후보 포함), (3) 판정(혈당 바이트 고정 / 전부 0 / 정상, 값이 바뀌는 index%5 위치, 빠진 index, MTU 잘림, 경고 비트) 을 출력한다. 페이지의 로그 보관 한도는 400줄 → 2000줄(분당 push 기준 약 16시간) 로 늘렸다.
+
 ## 12. 유의사항
 
 - Juggluco 는 **GPL-3.0** 이다. 코드를 그대로 가져오면 우리 앱도 GPL 이 된다. 이 문서와 `tools/gs3_protocol.py` 는 프로토콜 사실(상수·포맷·순서) 을 기술한 것이며, 상용 앱에는 클린룸으로 재구현할 것을 권장한다. 저자(j-kaltes) 는 "I don't help people with putting the code of Juggluco in their own app" 라고 명시 (Discussion #181).

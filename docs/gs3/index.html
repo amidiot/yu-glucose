@@ -230,7 +230,7 @@ for (const id of ['mac', 'acct', 'variant']) $(id).addEventListener('change', ()
 function log(line) {
   const t = new Date(); const ts = t.toTimeString().slice(0, 8) + '.' + String(t.getMilliseconds()).padStart(3, '0');
   const ta = $('log'); ta.value += `[${ts}] ${line}\n`;
-  const lines = ta.value.split('\n'); if (lines.length > 400) ta.value = lines.slice(-400).join('\n');
+  const lines = ta.value.split('\n'); if (lines.length > 2000) ta.value = lines.slice(-2000).join('\n');
   ta.scrollTop = ta.scrollHeight;
 }
 function status(html) { $('status').innerHTML = html; }
