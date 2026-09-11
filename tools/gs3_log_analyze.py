@@ -15,6 +15,8 @@ Lines understood (everything else is ignored):
     [12:34:56.789] ← FF31 wire 1b 14 02 01 00 ... | plain ... | glucose      (page log, preferred)
     [12:34:56.789] → FF32 askNewData start=1: 3e f6 ...                     (page log, writes)
     [12:34:56.789]    idx=5 t=... bytes=[404f00005aca0000] ...              (fallback: record bytes only)
+    REC idx=846 t=1789163220 raw=80568a0bca5a0308                            ("기록 내보내기": every record, survives reloads)
+    READING idx=845 t=1789163160 mmolx10=32 trend=0 gcwarn=1                 ("기록 내보내기": older rows without raw bytes)
     1b1402010000...                                                          (bare hex, one FF31 packet per line)
 
 Decoding is done with tools/gs3_protocol.py, i.e. exactly the layout Juggluco
@@ -42,6 +44,8 @@ RE_WIRE = re.compile(r"←\s*FF31\s+wire\s+([0-9a-fA-F]{2}(?:\s+[0-9a-fA-F]{2})*
 RE_WRITE = re.compile(r"→\s*FF32\s+(.*?):\s*([0-9a-fA-F]{2}(?:\s+[0-9a-fA-F]{2})*)\s*$")
 RE_IDX = re.compile(r"idx=(\d+)\s+t=(.*?)\s+[-\d.]+\s+mmol/L.*?bytes=\[([0-9a-fA-F]{16})\]")
 RE_BARE = re.compile(r"^\s*([0-9a-fA-F]{2}(?:[\s:]?[0-9a-fA-F]{2}){3,})\s*$")
+RE_REC = re.compile(r"\bREC idx=(\d+) t=(\d+) raw=([0-9a-fA-F]{16})\b")
+RE_READING = re.compile(r"\bREADING idx=(\d+) t=(\d+) mmolx10=(\d+) trend=(\d+)(?: gcwarn=(\d))?")
 
 
 def _hex(s: str) -> bytes:
@@ -70,11 +74,27 @@ class Analysis:
         if m:
             self.writes.append((ts, m.group(1).strip(), g.rc4(_hex(m.group(2)))))
             return
+        m = RE_REC.search(line)
+        if m:
+            idx, t, raw = int(m.group(1)), int(m.group(2)), _hex(m.group(3))
+            if idx not in self.records:
+                self.records[idx] = self._row(self._rec(idx, t, raw), ts, "export REC", raw)
+            return
+        m = RE_READING.search(line)
+        if m:
+            idx = int(m.group(1))
+            if idx not in self.records:
+                gc = int(m.group(5)) if m.group(5) is not None else None
+                self.records[idx] = dict(index=idx, time=int(m.group(2)), log_ts=ts, src="export READING",
+                                         mmol_x10=int(m.group(3)), mg_dl=int(round(int(m.group(3)) * 1.8)),
+                                         trend=int(m.group(4)), gcwarn=gc, twarn=None, shedding=None,
+                                         temp=None, fieldB=None, fieldD=None, raw="")
+            return
         m = RE_IDX.search(line)
         if m:
             idx, tstr, raw = int(m.group(1)), m.group(2), _hex(m.group(3))
             if idx not in self.records:      # wire line (if any) already gave a better row
-                self.records[idx] = self._row(self._rec(idx, 0, raw), ts, "idx-line " + tstr)
+                self.records[idx] = self._row(self._rec(idx, 0, raw), ts, "idx-line " + tstr, raw)
             return
         m = RE_BARE.match(line)
         if m and not line.strip().startswith("["):
@@ -157,17 +177,18 @@ class Analysis:
         shown = rows if (show_all or len(rows) <= 60) else [r for r in rows if r["index"] % 5 == 0]
         if shown is not rows:
             out.append(f"  (index%5==0 인 {len(shown)}개만 표시, 전부 보려면 --all)")
+        d = lambda v: "-" if v is None else v  # noqa: E731
         for r in shown:
             out.append(fmt.format(r["index"], _utc(r["time"]) if r["time"] else "-", r["log_ts"][:12],
                                   f"{r['mmol_x10'] / 10:.1f}", r["mg_dl"], r["trend"],
-                                  f"{r['gcwarn']}/{r['twarn']}/{r['shedding']}", r["temp"], r["fieldB"], r["fieldD"], r["raw"]))
+                                  f"{d(r['gcwarn'])}/{d(r['twarn'])}/{d(r['shedding'])}", d(r["temp"]), d(r["fieldB"]), d(r["fieldD"]), r["raw"] or "-"))
 
         out.append("== 필드별 변동 (값이 하나뿐이면 '고정') ==")
         fields = ["mmol_x10", "trend", "gcwarn", "twarn", "shedding", "temp", "fieldB", "fieldD"]
         if any(r.get("raw") for r in rows):
             fields += [f"r{k}" for k in range(8)] + [f"u16le@{o}" for o in (0, 2, 4, 6)]
         for f in fields:
-            vals = [r[f] for r in rows if f in r]
+            vals = [r[f] for r in rows if r.get(f) is not None]
             if not vals:
                 continue
             d = sorted(set(vals))
@@ -192,21 +213,26 @@ class Analysis:
         gl5 = [r["mmol_x10"] for r in five]
         if all(x == 0 for x in gls):
             v.append(f"- 혈당 필드가 전부 0 (레코드 {len(rows)}개, {span_min}분). 센서가 아직 혈당을 내지 않는 상태(웜업/미측정). 파서 문제 아님.")
+        elif len(rows) < 3 or span_min < 10:
+            v.append(f"- 레코드가 {len(rows)}개({span_min}분)뿐이라 변동 여부를 판정할 수 없습니다. 페이지의 '기록 내보내기' 로 저장된 전체 기록을 붙여 넣어 주세요.")
         elif len(set(gl5)) == 1 and len(five) >= 3:
             hrs = (five[-1]["index"] - five[0]["index"]) / 60
             v.append(f"- index%5==0 레코드 {len(five)}개({hrs:.1f}시간)에서 혈당 바이트(r7, r6 상위 2비트)가 {gl5[0]/10:.1f} mmol/L "
                      f"= {five[0]['mg_dl']} mg/dL 로 완전 고정. 이 바이트 자체가 안 변하므로 파서가 아니라 센서 출력이 고정된 것.")
-            moving = [f for f in ("fieldB", "fieldD", "temp", "trend") if len({r[f] for r in rows}) > 1]
+            moving = [f for f in ("fieldB", "fieldD", "temp", "trend") if len({r[f] for r in rows if r.get(f) is not None}) > 1]
             v.append(f"  같은 기간에 변한 필드: {', '.join(moving) or '없음'}")
         else:
             where = Counter(b["index"] % 5 for a, b in zip(rows, rows[1:])
                             if b["index"] == a["index"] + 1 and a["mmol_x10"] != b["mmol_x10"])
             v.append(f"- 혈당 값이 변합니다 ({len(set(gl5))}가지, index%5==0 기준). 연속 index 에서 값이 바뀐 위치의 index%5 분포: {dict(sorted(where.items()))} "
                      f"(Juggluco 문서: 센서는 1분마다 보내지만 5번은 같은 값 → 한 residue 에만 몰려 있으면 정상).")
-        if any(r["gcwarn"] for r in rows):
-            v.append(f"- gcwarn(글루코스 경고 비트)=1 인 레코드 {sum(r['gcwarn'] for r in rows)}개.")
-        if any(r["twarn"] or r["shedding"] for r in rows):
-            v.append(f"- twarn/shedding 비트가 켜진 레코드 {sum(1 for r in rows if r['twarn'] or r['shedding'])}개.")
+        gc_known = [r for r in rows if r.get("gcwarn") is not None]
+        if any(r["gcwarn"] for r in gc_known):
+            n = sum(r["gcwarn"] for r in gc_known)
+            v.append(f"- gcwarn(글루코스 경고 비트)=1 인 레코드 {n}/{len(gc_known)}개"
+                     + (" — 센서가 모든 값에 경고를 붙이고 있음." if n == len(gc_known) else "."))
+        if any(r.get("twarn") or r.get("shedding") for r in rows):
+            v.append(f"- twarn/shedding 비트가 켜진 레코드 {sum(1 for r in rows if r.get('twarn') or r.get('shedding'))}개.")
         gaps = [(a + 1, b - 1) for a, b in zip(idxs, idxs[1:]) if b - a > 1]
         if gaps:
             v.append(f"- 빠진 index 구간 {len(gaps)}개: " + ", ".join(f"{a}-{b}" if a != b else str(a) for a, b in gaps[:10])
@@ -275,6 +301,17 @@ def selftest() -> None:
     rep = "\n".join(a.report(show_all=True))
     assert "혈당 값이 변합니다" in rep and "빠진 index 구간 1개: 30" in rep and "MTU 잘림" in rep, rep
     assert "index%5 분포: {0: 3}" in rep, rep
+    # export formats: REC (raw) + READING (no raw), mixed with a wire line for the same index (wire wins)
+    exp = ["--- EXPORT x raw=2 readings-only=1 ---",
+           "REC idx=840 t=1789162860 raw=80568a0bca5a0308",
+           "REC idx=845 t=1789163160 raw=80568a0bca5a0308",
+           "READING idx=835 t=1789162560 mmolx10=32 trend=0 gcwarn=1",
+           "READING idx=830 t=1789162260 mmolx10=32 trend=0",
+           "--- END EXPORT ---"]
+    a = analyze_text("\n".join(exp))
+    rep = "\n".join(a.report(show_all=True))
+    assert list(a.records) == [840, 845, 835, 830] and a.records[835]["temp"] is None, list(a.records)
+    assert "완전 고정" in rep and "gcwarn(글루코스 경고 비트)=1 인 레코드 3/3개" in rep, rep
     # fallback idx-line parsing
     a = analyze_text("[11:00:00.000]    idx=45 t=11:00:00 6.5 mmol/L 117 mg/dL trend=0 temp=317 bytes=[404f64004aca0010] fieldB=100 fieldD=51786")
     assert list(a.records) == [45] and a.records[45]["mmol_x10"] == 64, a.records

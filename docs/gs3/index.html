@@ -69,6 +69,7 @@ textarea { width:100%; height:220px; font:12px/1.4 ui-monospace, Menlo, monospac
       <span id="mmol">— mmol/L</span>
       <span id="age">기록 없음</span>
       <span id="idx"></span>
+      <span id="flags" class="high"></span>
     </div>
   </section>
 
@@ -122,7 +123,8 @@ textarea { width:100%; height:220px; font:12px/1.4 ui-monospace, Menlo, monospac
     <details open>
       <summary>패킷 로그 (문제가 생기면 이 내용을 복사해 주세요)</summary>
       <textarea id="log" readonly spellcheck="false"></textarea>
-      <div class="btns"><button id="btnCopy">로그 복사</button><button id="btnClearLog">로그 지우기</button></div>
+      <div class="btns"><button id="btnCopy">로그 복사</button><button id="btnExport">기록 내보내기</button><button id="btnClearLog">로그 지우기</button></div>
+      <p class="small" style="margin:6px 0 0">"기록 내보내기" 는 지금까지 저장된 모든 레코드(원시 8바이트 포함, 새로고침 후에도 유지)를 로그 칸에 텍스트로 붙입니다. 그대로 "로그 복사" 해서 <code>tools/gs3_log_analyze.py</code> 에 넣으면 됩니다.</p>
     </details>
   </section>
 
@@ -205,7 +207,7 @@ function parse(data) {
     for (let i = 0; i < count; i++) {
       const r = p.subarray(9 + i * 8, 17 + i * 8);
       records.push({ index: startIndex + i, time: startTime + i * 60, mmolx10: (r[7] << 2) | (r[6] >> 6), trend: (r[6] >> 3) & 7,
-        temp: (r[1] << 2) | (r[0] >> 6), fieldB: r[2] | (r[3] << 8), fieldD: r[4] | (r[5] << 8), gcwarn: r[6] & 1, twarn: r[0] & 1,
+        temp: (r[1] << 2) | (r[0] >> 6), fieldB: r[2] | (r[3] << 8), fieldD: r[4] | (r[5] << 8), gcwarn: r[6] & 1, twarn: r[0] & 1, shedding: (r[0] >> 1) & 1,
         raw: Array.from(r, x => x.toString(16).padStart(2, '0')).join('') });
     }
     return { kind: 'glucose', plain: p, cmd, count, startIndex, startTime, remaining, records };
@@ -218,7 +220,8 @@ function parse(data) {
 const $ = id => document.getElementById(id);
 const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 let device = null, ff31 = null, ff32 = null, connected = false, stage = 'idle', stageTimer = null, reconnects = 0, pollTimer = null, warmup = false;
-let readings = store.get('gs3.readings', {});   // index -> {t, mmolx10, trend}
+let readings = store.get('gs3.readings', {});   // index -> {t, mmolx10, trend, gc, tw, sh}  (index%5==0 && mmolx10>0 only)
+let rawrecs = store.get('gs3.raw', {});         // index -> [t, 16-hex raw record] for EVERY record received (survives reloads)
 let lastIndex = store.get('gs3.lastIndex', 0);
 
 $('mac').value = store.get('gs3.mac', '');
@@ -246,7 +249,7 @@ function setStage(s, hint) {
 function render() {
   const idxs = Object.keys(readings).map(Number).sort((a, b) => a - b);
   const tb = $('rows'); tb.innerHTML = '';
-  if (!idxs.length) { tb.innerHTML = '<tr><td colspan="5" class="small">아직 수신한 값이 없습니다.</td></tr>'; $('mgdl').textContent = '—'; $('mgdl').className = 'big'; $('arrow').textContent = '·'; $('mmol').textContent = '— mmol/L'; $('age').textContent = '기록 없음'; $('idx').textContent = ''; return; }
+  if (!idxs.length) { tb.innerHTML = '<tr><td colspan="5" class="small">아직 수신한 값이 없습니다.</td></tr>'; $('mgdl').textContent = '—'; $('mgdl').className = 'big'; $('arrow').textContent = '·'; $('mmol').textContent = '— mmol/L'; $('age').textContent = '기록 없음'; $('idx').textContent = ''; $('flags').textContent = ''; return; }
   const last = readings[idxs[idxs.length - 1]];
   const mg = Math.round(last.mmolx10 * 1.8);
   $('mgdl').textContent = String(mg);
@@ -256,10 +259,11 @@ function render() {
   const ageMin = Math.round((now() - last.t) / 60);
   $('age').textContent = ageMin < 1 ? '방금' : `${ageMin}분 전 (${new Date(last.t * 1000).toLocaleTimeString()})`;
   $('idx').textContent = `index ${idxs[idxs.length - 1]}`;
+  $('flags').textContent = last.gc ? '⚠ 센서 경고 비트 gcwarn=1' : '';
   for (const i of idxs.slice(-36).reverse()) {
     const r = readings[i]; const d = new Date(r.t * 1000);
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })} ${d.toTimeString().slice(0, 5)}</td><td class="n">${i}</td><td class="n">${Math.round(r.mmolx10 * 1.8)}</td><td class="n">${(r.mmolx10 / 10).toFixed(1)}</td><td>${TREND[r.trend] || '?'} ${TREND_KO[r.trend] || ''}</td>`;
+    tr.innerHTML = `<td>${d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })} ${d.toTimeString().slice(0, 5)}</td><td class="n">${i}</td><td class="n">${Math.round(r.mmolx10 * 1.8)}</td><td class="n">${(r.mmolx10 / 10).toFixed(1)}</td><td>${TREND[r.trend] || '?'} ${TREND_KO[r.trend] || ''}${r.gc ? ' ⚠' : ''}</td>`;
     tb.appendChild(tr);
   }
 }
@@ -326,10 +330,11 @@ async function onNotify(ev) {
       setStage('streaming');
       for (const r of pkt.records) {
         lastIndex = Math.max(lastIndex, r.index);
-        if (r.index % 5 === 0 && r.mmolx10 > 0) readings[r.index] = { t: r.time, mmolx10: r.mmolx10, trend: r.trend };
-        log(`   idx=${r.index} t=${new Date(r.time * 1000).toLocaleTimeString()} ${(r.mmolx10 / 10).toFixed(1)} mmol/L ${Math.round(r.mmolx10 * 1.8)} mg/dL trend=${r.trend} temp=${r.temp} bytes=[${r.raw}] fieldB=${r.fieldB} fieldD=${r.fieldD}`);
+        if (r.index % 5 === 0 && r.mmolx10 > 0) readings[r.index] = { t: r.time, mmolx10: r.mmolx10, trend: r.trend, gc: r.gcwarn, tw: r.twarn, sh: r.shedding };
+        rawrecs[r.index] = [r.time, r.raw];
+        log(`   idx=${r.index} t=${new Date(r.time * 1000).toLocaleTimeString()} ${(r.mmolx10 / 10).toFixed(1)} mmol/L ${Math.round(r.mmolx10 * 1.8)} mg/dL trend=${r.trend} flags gc/tw/sh=${r.gcwarn}/${r.twarn}/${r.shedding} temp=${r.temp} bytes=[${r.raw}] fieldB=${r.fieldB} fieldD=${r.fieldD}`);
       }
-      store.set('gs3.readings', readings); store.set('gs3.lastIndex', lastIndex);
+      store.set('gs3.readings', readings); store.set('gs3.lastIndex', lastIndex); store.set('gs3.raw', rawrecs);
       $('startidx').value = String(lastIndex + 1);
       const anyValid = pkt.records.some(r => r.mmolx10 > 0);
       warmup = pkt.count > 0 && !anyValid && Object.keys(readings).length === 0;
@@ -407,9 +412,19 @@ $('btnSelftest').addEventListener('click', () => {
   status(`RC4 키 ${a && b ? 'OK' : '실패'} · 인증 패킷 ${c ? 'OK' : '실패'} · Web Bluetooth ${ble ? '사용 가능' : '없음 (Bluefy 필요)'}`);
   log(`selftest rc4=${a && b} auth=${c} webbluetooth=${ble} ua=${navigator.userAgent}`);
 });
-$('btnClear').addEventListener('click', () => { if (confirm('저장된 혈당 기록을 지울까요?')) { readings = {}; lastIndex = 0; store.set('gs3.readings', readings); store.set('gs3.lastIndex', 0); $('startidx').value = '1'; render(); } });
+$('btnClear').addEventListener('click', () => { if (confirm('저장된 혈당 기록을 지울까요?')) { readings = {}; rawrecs = {}; lastIndex = 0; store.set('gs3.readings', readings); store.set('gs3.raw', rawrecs); store.set('gs3.lastIndex', 0); $('startidx').value = '1'; render(); } });
 $('btnCopy').addEventListener('click', async () => { const ta = $('log'); try { await navigator.clipboard.writeText(ta.value); status('로그를 복사했습니다'); } catch (e) { ta.focus(); ta.select(); status('길게 눌러 복사하세요'); } });
 $('btnClearLog').addEventListener('click', () => { $('log').value = ''; });
+$('btnExport').addEventListener('click', () => {
+  const ri = Object.keys(rawrecs).map(Number).sort((a, b) => a - b);
+  const rd = Object.keys(readings).map(Number).sort((a, b) => a - b).filter(i => !rawrecs[i]);
+  const lines = ri.map(i => `REC idx=${i} t=${rawrecs[i][0]} raw=${rawrecs[i][1]}`)
+    .concat(rd.map(i => { const r = readings[i]; return `READING idx=${i} t=${r.t} mmolx10=${r.mmolx10} trend=${r.trend}` + (r.gc === undefined ? '' : ` gcwarn=${r.gc}`); }));
+  const ta = $('log');
+  ta.value += `--- EXPORT ${new Date().toISOString()} raw=${ri.length} readings-only=${rd.length} lastIndex=${lastIndex} ---\n${lines.join('\n')}\n--- END EXPORT ---\n`;
+  ta.scrollTop = ta.scrollHeight;
+  status(`저장된 기록 ${lines.length}줄을 로그 칸에 붙였습니다. "로그 복사" 로 복사하세요.`);
+});
 
 if (!navigator.bluetooth) {
   const b = $('banner'); b.hidden = false;
